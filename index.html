@@ -15,6 +15,8 @@ html,body{touch-action:manipulation}
 button,canvas{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 input,textarea{user-select:text;-webkit-user-select:text;-webkit-touch-callout:default;touch-action:auto;font-size:16px}
 .throw{touch-action:none}
+.widget button,.widget canvas,.widget .coins,.widget .stats{touch-action:manipulation}
+.widget .throw{touch-action:none}
 .panel{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
 @media(pointer:coarse){
   .widget{right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
@@ -37,7 +39,7 @@ input,textarea{user-select:text;-webkit-user-select:text;-webkit-touch-callout:d
 </main>
 <dialog id="resetDialog"><strong>重新从 1F 开始？</strong><p>会清空当前摸鱼值、背包和图鉴。建议先导出存档。</p><div class="dialogbuttons"><button id="cancelReset">取消</button><button id="confirmReset">确认重开</button></div></dialog>
 <dialog id="testDialog"><form id="testForm" novalidate><strong>测试选项</strong><p>直接设置当前余额，不是追加。楼层、背包和衣柜不变。</p><label for="testCoins">摸鱼值（0–1,000,000,000）</label><input id="testCoins" type="number" min="0" max="1000000000" step="1" required style="display:block;width:100%;margin-top:8px;padding:8px"><p id="testError" role="alert" style="color:#efbc6f"></p><div class="dialogbuttons"><button type="button" id="cancelTest">取消</button><button type="submit">设置余额</button></div></form></dialog>
-<script src="./engine.js?v=auto-1"></script>
-<script src="./app.js?v=auto-1"></script>
+<script src="./engine.js?v=touch-fix-1"></script>
+<script src="./app.js?v=touch-fix-1"></script>
 </body>
 </html>

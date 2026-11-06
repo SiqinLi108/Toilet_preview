@@ -3,6 +3,7 @@ const G = ToiletGame, $ = id => document.getElementById(id), KEY = 'toilet-idle-
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let state = G.initial(), charge = null, flight = null, lastSave = 0, viewFloor = 1;
 let inputAt = -Infinity, unlockAt = -Infinity, effects = [], lastRewards = [], rewardAt = -Infinity, spentAt = -Infinity, nextAuto = 0;
+let heldPointer = null, heldKey = null, heldDue = 0, lastTap = null, touchStart = null;
 function say(text) { $('notice').textContent = text; }
 try {
   const raw = localStorage.getItem(KEY);
@@ -95,7 +96,7 @@ function renderHUD() {
   $('decor').textContent = G.bathroom(state.floor).name;
   $('cost').textContent = G.cost(state.floor) + ' 摸鱼值';
   $('draw').disabled = !!flight || !!charge || state.coins < G.cost(state.floor);
-  $('throw').disabled = !!flight || id === null || !!charge || state.floor >= G.MAX_FLOOR;
+  $('throw').disabled = !!flight || id === null || state.floor >= G.MAX_FLOOR;
   $('autoMode').checked = state.autoMode;
   $('chargeFill').style.width = (charge ? charge.steps * 20 : 0) + '%';
   $('chargeLabel').textContent = charge ? '蓄力 ' + charge.steps + '/5 · 点击推进' : '投掷共需 5 摸鱼值';
@@ -123,6 +124,33 @@ document.addEventListener('contextmenu', e => {
   const target = e.target;
   if (target && target.closest && target.closest('.widget, dialog') && !target.closest('input, textarea')) e.preventDefault();
 });
+// Legacy mobile WebViews may ignore manipulation on nested game elements.
+// Cancel only stationary, nearby second taps; do not interfere with scrolling or pinch gestures.
+document.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) { touchStart = null; lastTap = null; stopHold(); return; }
+  const t = e.touches[0]; touchStart = { x: t.clientX, y: t.clientY, time: performance.now() };
+}, { passive: true });
+document.addEventListener('touchend', e => {
+  const start = touchStart; touchStart = null;
+  const target = e.target;
+  if (!start || e.touches.length || !e.changedTouches.length || !target || !target.closest ||
+      !target.closest('.widget') || target.closest('input, textarea, label')) { lastTap = null; return; }
+  const t = e.changedTouches[0], now = performance.now();
+  if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10 || now - start.time > 300) { lastTap = null; return; }
+  if (lastTap && now - lastTap.time < 350 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 24) {
+    if (e.cancelable) {
+      e.preventDefault();
+      // A cancelled touchend suppresses its compatibility click: preserve normal button action.
+      const button = target.closest('button');
+      if (button && button !== $('throw') && !button.disabled) button.click();
+    }
+  }
+  lastTap = { x: t.clientX, y: t.clientY, time: now };
+}, { passive: false });
+document.addEventListener('touchcancel', () => { touchStart = lastTap = null; stopHold(); });
+$('widget').addEventListener('dblclick', e => {
+  if (!e.target.closest('input, textarea, label')) e.preventDefault();
+});
 function panel() { $('panel').hidden = !$('panel').hidden; renderBag(); }
 $('bagToggle').onclick = panel; $('itemToggle').onclick = panel; $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('collapse').onclick = () => {
@@ -144,6 +172,7 @@ function beginCharge() {
   save(); renderBag(); renderHUD();
 }
 function cancelCharge() {
+  stopHold();
   if (!charge) return; G.cancelCharge(state); charge = null;
   $('caption').textContent = '已取消，产物保留；已消耗蓄力费用不退。'; save(); renderBag(); renderHUD();
 }
@@ -159,11 +188,32 @@ function advancePaidCharge() {
   viewFloor = result.from; save(); $('caption').textContent = '飞往 ' + result.to + 'F · 窗口仍封闭';
   say('本次升 ' + (result.to - result.from) + ' 层，产物已消耗。'); renderBag(); renderHUD();
 }
-$('throw').onclick = beginCharge;
+function stopHold() { heldPointer = null; heldKey = null; nextAuto = performance.now() + 400; }
+$('throw').addEventListener('pointerdown', e => {
+  if (e.button !== 0 || e.isPrimary === false || heldPointer !== null || flight) return;
+  e.preventDefault();
+  if (!charge) beginCharge();
+  if (!charge) return;
+  heldPointer = e.pointerId; heldDue = performance.now() + 400;
+  $('throw').setPointerCapture(e.pointerId);
+});
+const finishHold = e => { if (heldPointer === e.pointerId) stopHold(); };
+$('throw').addEventListener('pointerup', finishHold);
+$('throw').addEventListener('pointercancel', finishHold);
+$('throw').addEventListener('lostpointercapture', finishHold);
+$('throw').addEventListener('keydown', e => {
+  if (e.code !== 'Space' && e.code !== 'Enter') return;
+  e.preventDefault(); if (e.repeat || heldKey || flight) return;
+  if (!charge) beginCharge();
+  if (charge) { heldKey = e.code; heldDue = performance.now() + 400; }
+});
+$('throw').addEventListener('keyup', e => { if (e.code === heldKey) { e.preventDefault(); stopHold(); } });
+$('throw').addEventListener('blur', stopHold);
+$('throw').onclick = e => { if (!e || !e.detail) beginCharge(); };
 $('autoMode').onchange = () => { state.autoMode = $('autoMode').checked; nextAuto = performance.now() + 400; save(); renderHUD(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { cancelCharge(); $('panel').hidden = true; } });
-window.addEventListener('blur', save);
-document.addEventListener('visibilitychange', save);
+window.addEventListener('blur', () => { stopHold(); save(); });
+document.addEventListener('visibilitychange', () => { stopHold(); save(); });
 window.addEventListener('pagehide', save);
 $('export').onclick = () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -447,7 +497,11 @@ function drawScene(now) {
   }
 }
 function frame(now) {
-  if (state.autoMode && !document.hidden && $('panel').hidden && !$('testDialog').open && !$('resetDialog').open && !flight && now >= nextAuto && state.floor < G.MAX_FLOOR) {
+  const canOperate = !document.hidden && $('panel').hidden && !$('testDialog').open && !$('resetDialog').open && !flight;
+  if (canOperate && charge && (heldPointer !== null || heldKey !== null) && now >= heldDue) {
+    heldDue = now + 400; advancePaidCharge();
+  }
+  if (state.autoMode && heldPointer === null && heldKey === null && canOperate && now >= nextAuto && state.floor < G.MAX_FLOOR) {
     nextAuto = now + 400;
     if (charge) advancePaidCharge();
     else if (state.selected !== null && state.bag[state.selected]) beginCharge();

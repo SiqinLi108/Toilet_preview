@@ -43,7 +43,7 @@
   }
   function initial(seed = Math.floor(Math.random() * 4294967296)) {
     return { version: 5, autoMode: true, charge: null, floor: 1, unlockedFloor: 1, coins: 60, bag: Array(ITEM_COUNT).fill(0), collection: [], selected: null, pending: null,
-      seed: seed >>> 0, costumes: [], equipped: null, lastSurpriseFloor: 1 };
+      seed: seed >>> 0, costumes: [], equipped: null, lastSurpriseFloor: 1, defeatedGuards: [] };
   }
   function surprises(state, block) {
     if (!Number.isInteger(state.seed) || state.seed < 0 || state.seed > 4294967295 ||
@@ -161,6 +161,8 @@
   function land(state) {
     if (!state.pending) return null;
     const result = { ...state.pending };
+    if (!state.defeatedGuards) state.defeatedGuards = [];
+    if (!state.defeatedGuards.includes(result.to)) state.defeatedGuards.push(result.to);
     result.rewards = collectSurprises(state, state.unlockedFloor, result.to);
     state.floor = result.to;
     state.unlockedFloor = Math.max(state.unlockedFloor, result.to);
@@ -169,6 +171,8 @@
   }
   function restore(raw) {
     const s = JSON.parse(raw);
+    if (s && s.defeatedGuards === undefined) s.defeatedGuards = [];
+    if (!s || !Array.isArray(s.defeatedGuards) || !s.defeatedGuards.every(f => Number.isSafeInteger(f) && f > 1 && f <= MAX_FLOOR)) throw new Error('Invalid guards');
     const version = s && s.version;
     const size = version === 1 ? 12 : version === 2 ? 15 : version === 3 ? 35 : ITEM_COUNT;
     if (!s || ![1, 2, 3, 4, 5].includes(version) || !Number.isSafeInteger(s.floor) || s.floor < 1 || s.floor > MAX_FLOOR ||
@@ -238,7 +242,7 @@
     }
     return { version: 5, autoMode: s.autoMode, charge: s.charge, floor: s.floor, unlockedFloor: s.unlockedFloor, coins: s.coins,
       bag: s.bag, collection: s.collection, selected: s.selected, pending: s.pending,
-      seed: s.seed, costumes: s.costumes, equipped: s.equipped, lastSurpriseFloor: s.lastSurpriseFloor };
+      seed: s.seed, costumes: s.costumes, equipped: s.equipped, lastSurpriseFloor: s.lastSurpriseFloor, defeatedGuards: [...new Set(s.defeatedGuards)] };
   }
   const BATHROOMS = [
     { name: '拾荒卫生间', wall: '#494640', partition: '#756349', toilet: '#ab8557' },

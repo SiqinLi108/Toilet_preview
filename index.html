@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>卫生间摸鱼 · 本地试玩</title>
+<title>Work Chill · WC 本地试玩</title>
 <style>
 :root{color-scheme:dark;--bg:#171e20;--ink:#e5e5ce;--muted:#889a95;--mint:#9cdfa5;--line:#3b4b48}
 *{box-sizing:border-box}body{margin:0;background:#101617;color:var(--ink);font:13px/1.5 'Microsoft YaHei',sans-serif}button,input{font:inherit}button{cursor:pointer;border:1px solid var(--line);background:#263331;color:var(--ink);border-radius:0;padding:8px}button:hover{background:#35443e}button:focus-visible{outline:2px solid var(--mint);outline-offset:3px}button:disabled{cursor:default;opacity:.42}
@@ -25,12 +25,13 @@ input,textarea{user-select:text;-webkit-user-select:text;-webkit-touch-callout:d
   .scene{width:100%;height:auto;aspect-ratio:124/130}
   dialog{max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto}
 }
+.wc-accent{font-weight:900;color:#efbc6f}.brand-name{line-height:1.25;display:inline-block;vertical-align:middle}
 </style>
 </head>
 <body>
-<aside class="intro"><small>OFFICE ESCAPE / 005</small><h1>不升职。<br>升厕所。</h1><p>每次点击或按键，摸鱼值 +1。<br>扔出产物，击碎封闭楼层的窗口。</p><p class="rule">自动抽取 → 消耗5值分段蓄力 → 满条投掷。<br>蓄力时点击空白或楼层：获得1，消耗1，进度+20%。</p><p>首局赠送60值，自动模式默认开启。无自动或离线收入。背包打开时暂停自动操作；外观领取后需到衣柜手动穿戴。</p><p>浏览器只统计本页面的输入，不监听其他软件。好友位仅预留，尚未联机。可收起界面，但浏览器不支持系统置顶或鼠标穿透。</p></aside>
+<aside class="intro"><small><strong class="wc-accent">WC</strong> / WORK CHILL</small><h1><strong class="wc-accent">W</strong>ork<br><strong class="wc-accent">C</strong>hill</h1><p>每次点击或按键，摸鱼值 +1。<br>扔出产物，击碎封闭楼层的窗口。</p><p class="rule">自动抽取 → 消耗5值分段蓄力 → 满条投掷。<br>蓄力时点击空白或楼层：获得1，消耗1，进度+20%。</p><p>首局赠送60值，自动模式默认开启。无自动或离线收入。背包打开时暂停自动操作；外观领取后需到衣柜手动穿戴。</p><p>浏览器只统计本页面的输入，不监听其他软件。好友位仅预留，尚未联机。可收起界面，但浏览器不支持系统置顶或鼠标穿透。</p></aside>
 <main class="widget" id="widget" aria-label="卫生间摸鱼小游戏">
-<header class="head"><div class="topline"><span class="brand">卫生间摸鱼 / DEMO</span><button class="mini" id="collapse" title="收起界面" aria-label="收起界面">−</button></div><div class="coins" id="coinDisplay"><span id="coins">60</span> <span style="font-size:10px;color:var(--muted)">摸鱼值</span></div><div class="stats"><span><b id="floor">1F</b> · <span id="decor">基础卫生间</span></span><span>键鼠 +1</span></div></header>
+<header class="head"><div class="topline"><span class="brand"><span class="brand-name"><strong class="wc-accent">W</strong>ork<br><strong class="wc-accent">C</strong>hill</span> / <strong class="wc-accent">WC</strong></span><button class="mini" id="collapse" title="收起界面" aria-label="收起界面">−</button></div><div class="coins" id="coinDisplay"><span id="coins">60</span> <span style="font-size:10px;color:var(--muted)">摸鱼值</span></div><div class="stats"><span><b id="floor">1F</b> · <span id="decor">基础卫生间</span></span><span>键鼠 +1</span></div></header>
 <canvas class="scene" id="scene" width="124" height="130" role="img" aria-label="卫生间每层三个马桶，自己坐第一席，其余为预留好友位"></canvas>
 <div class="caption" id="caption">每次点击或按键，摸鱼值 +1。</div>
 <section class="controls"><label style="display:flex;align-items:center;gap:7px;font-size:11px;min-height:32px"><input id="autoMode" type="checkbox" checked style="width:18px;height:18px;margin:0">自动抽取与蓄力投掷</label><div class="chargehead"><span id="chargeLabel">投掷共需 5 摸鱼值</span><span id="prediction">至少 +1 层</span></div><div class="meter"><div id="chargeFill"></div></div><div class="buttons"><button id="bagToggle" aria-label="展开背包与图鉴" title="背包 / 图鉴">▦</button><button class="itembutton" id="itemToggle" aria-label="选择投掷产物"><canvas id="selectedIcon" width="16" height="16"></canvas><span class="itemname" id="selectedName">未选择</span></button><button class="throw" id="throw">蓄力 ↑</button></div><button class="draw" id="draw"><span>＋ 抽取产物</span><span id="cost">20 摸鱼值</span></button></section>
@@ -39,7 +40,7 @@ input,textarea{user-select:text;-webkit-user-select:text;-webkit-touch-callout:d
 </main>
 <dialog id="resetDialog"><strong>重新从 1F 开始？</strong><p>会清空当前摸鱼值、背包和图鉴。建议先导出存档。</p><div class="dialogbuttons"><button id="cancelReset">取消</button><button id="confirmReset">确认重开</button></div></dialog>
 <dialog id="testDialog"><form id="testForm" novalidate><strong>测试选项</strong><p>直接设置当前余额，不是追加。楼层、背包和衣柜不变。</p><label for="testCoins">摸鱼值（0–1,000,000,000）</label><input id="testCoins" type="number" min="0" max="1000000000" step="1" required style="display:block;width:100%;margin-top:8px;padding:8px"><p id="testError" role="alert" style="color:#efbc6f"></p><div class="dialogbuttons"><button type="button" id="cancelTest">取消</button><button type="submit">设置余额</button></div></form></dialog>
-<script src="./engine.js?v=touch-fix-1"></script>
-<script src="./app.js?v=touch-fix-1"></script>
+<script src="./engine.js?v=toilet-flight-1"></script>
+<script src="./app.js?v=toilet-flight-1"></script>
 </body>
 </html>

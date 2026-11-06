@@ -184,7 +184,7 @@ function advancePaidCharge() {
   save(); renderHUD();
   const result = step.launch;
   if (!result) return;
-  flight = { ...result, start: performance.now(), duration: reduced ? 120 : 1200, impacted: false };
+  flight = { ...result, start: performance.now(), duration: reduced ? 600 : 1750 + Math.min(1800, (result.to - result.from) * 110), impacted: false, phase: 'throw' };
   viewFloor = result.from; save(); $('caption').textContent = '飞往 ' + result.to + 'F · 窗口仍封闭';
   say('本次升 ' + (result.to - result.from) + ' 层，产物已消耗。'); renderBag(); renderHUD();
 }
@@ -366,47 +366,98 @@ function drawRoomWindow(tier, y) {
     ctx.fillStyle = '#e5e5ce'; ctx.fillRect(87, y + 12, 6, 3); ctx.fillRect(89, y + 10, 3, 2);
   }
 }
+function drawGuard(y, down, now) {
+  ctx.save();
+  if (down) { ctx.translate(81, y + 24); ctx.rotate(Math.PI / 2); ctx.translate(-81, -y - 24); }
+  ctx.fillStyle = '#4b6385'; ctx.fillRect(77, y + 7, 7, 3); ctx.fillRect(76, y + 10, 9, 1);
+  ctx.fillStyle = '#ddb38a'; ctx.fillRect(78, y + 11, 5, 5);
+  ctx.fillStyle = '#4b6385'; ctx.fillRect(77, y + 16, 7, 7);
+  ctx.fillStyle = '#efbc6f'; ctx.fillRect(81, y + 17, 1, 2);
+  ctx.fillStyle = '#1b2726'; ctx.fillRect(78, y + 23, 2, 3); ctx.fillRect(82, y + 23, 2, 3); ctx.restore();
+  if (down && !reduced) { ctx.fillStyle = '#efbc6f'; ctx.fillRect(79 + Math.round(Math.sin(now / 100) * 3), y + 8, 2, 2); }
+}
+function drawRider(y, now, moving) {
+  const celebrating = !reduced && now - rewardAt < 1000;
+  const bob = moving ? 0 : celebrating ? -Math.round(3 * Math.abs(Math.sin((now - rewardAt) / 100))) : !reduced && now - inputAt < 180 ? -1 : 0;
+  if (moving) {
+    ctx.fillStyle = G.bathroom(flight.from).toilet;
+    ctx.fillRect(24, y + 13, 7, 6); ctx.fillRect(23, y + 20, 10, 3); ctx.fillRect(26, y + 23, 5, 3);
+    ctx.fillStyle = '#9cdfa5'; ctx.fillRect(25, y + 26, 3, reduced ? 3 : 5 + Math.floor(now / 80) % 4);
+  }
+  ctx.fillStyle = '#343332'; ctx.fillRect(24, y + 3 + bob, 8, 4);
+  ctx.fillStyle = '#ddb38a'; ctx.fillRect(25, y + 7 + bob, 6, 6);
+  ctx.fillStyle = '#aeca91'; ctx.fillRect(24, y + 13 + bob, 8, 8);
+  ctx.fillStyle = '#1b2726'; ctx.fillRect(27, y + 20, 8, 3); ctx.fillRect(31, y + 22, 3, 4); ctx.fillRect(32, y + 12 + bob, 4, 6);
+  ctx.fillStyle = '#9cdfa5'; ctx.fillRect(33, y + 13 + bob, 2, 2);
+  drawCostume(ctx, state.equipped, 24, y + 3 + bob);
+  if (!moving && now - inputAt < 300) { ctx.fillRect(37, y + 7, 1, 2); ctx.fillRect(39, y + 5, 1, 2); }
+}
 function drawScene(now) {
   let progress = 0;
+  let riderFloor = state.floor;
   if (flight) {
-    progress = Math.min(1, (now - flight.start) / flight.duration);
-    const travel = Math.min(1, progress / .78);
-    viewFloor = flight.from + (flight.to - flight.from) * travel * travel * (3 - 2 * travel);
-    if (progress >= .78 && !flight.impacted) {
-      lastRewards = G.land(state).rewards; flight.impacted = true; unlockAt = now;
+    const elapsed = now - flight.start, shotEnd = reduced ? 120 : 1200, riseStart = reduced ? 200 : 1550;
+    progress = Math.min(1, elapsed / shotEnd);
+    flight.phase = elapsed < shotEnd ? 'throw' : elapsed < riseStart ? 'impact' : 'rise';
+    if (elapsed >= shotEnd && !flight.impacted) {
+      flight.impacted = true;
+      $('caption').textContent = '目标保安倒下 · 马桶准备起飞';
+    }
+    if (flight.phase === 'throw') viewFloor = flight.from + (flight.to - flight.from) * progress * progress * (3 - 2 * progress);
+    else if (flight.phase === 'impact') viewFloor = flight.to;
+    else {
+      const t = Math.min(1, (elapsed - riseStart) / (flight.duration - riseStart - 200));
+      riderFloor = flight.from + (flight.to - flight.from) * t;
+      viewFloor = riderFloor;
+      $('caption').textContent = '马桶升天 · 顶开楼板前往 ' + flight.to + 'F';
+    }
+    if (elapsed >= flight.duration) {
+      lastRewards = G.land(state).rewards; unlockAt = now;
       if (lastRewards.length) rewardAt = now;
+      flight = null; stopHold(); viewFloor = riderFloor = state.floor;
       save(); renderBag(); renderHUD();
-      $('caption').textContent = '破窗成功 · 1–' + state.unlockedFloor + 'F 全部开放';
+      $('caption').textContent = '抵达 ' + state.floor + 'F · 马桶已停稳';
+      say('目标层及以下已开放，外观到衣柜手动穿戴。');
     }
   }
   ctx.clearRect(0, 0, 124, 130);
   const base = Math.floor(viewFloor) - 1;
   for (let k = -1; k < 5; k++) {
-    const f = base + k; if (f < 1) continue;
+    const f = base + k; if (f < 1 || f > G.MAX_FLOOR) continue;
     const y = Math.round(92 - (f - viewFloor) * 30), theme = G.bathroom(f), tier = theme.tier;
     const locked = f > state.unlockedFloor;
     ctx.save();
     ctx.globalAlpha = Math.max(.15, Math.min(1, (y + 28) / 100));
     ctx.fillStyle = theme.wall; ctx.fillRect(18, y, 80, 28);
     ctx.fillStyle = '#263533'; ctx.fillRect(18, y + 27, 80, 3);
+    if (flight && flight.phase === 'rise' && f >= flight.from && f < riderFloor) {
+      ctx.clearRect(21, y + 27, 17, 3);
+      if (!reduced && riderFloor - f < 1) {
+        ctx.fillStyle = '#947657'; ctx.fillRect(19, y + 30, 3, 2); ctx.fillRect(38, y + 32, 3, 2);
+      }
+    }
     ctx.fillStyle = '#a3b7a4'; ctx.font = '5px monospace'; ctx.fillText(f + 'F', 1, y + 17);
     drawRoomDecor(tier, y, now);
     for (let seat = 0; seat < 3; seat++) {
       const x = 23 + seat * 20;
       ctx.fillStyle = theme.partition; ctx.fillRect(x - 2, y, 1, 27);
       ctx.fillStyle = theme.toilet;
-      ctx.fillRect(x + 1, y + 13, 7, 6); ctx.fillRect(x, y + 20, 10, 3); ctx.fillRect(x + 3, y + 23, 5, 3);
+      if (!(flight && flight.phase === 'rise' && seat === 0 && f >= flight.from && f <= flight.to)) {
+        ctx.fillRect(x + 1, y + 13, 7, 6); ctx.fillRect(x, y + 20, 10, 3); ctx.fillRect(x + 3, y + 23, 5, 3);
+      }
       if (seat > 0 && !locked) { ctx.fillStyle = '#889a95'; ctx.fillRect(x + 4, y + 7, 1, 5); ctx.fillRect(x + 2, y + 9, 5, 1); }
     }
     if (!locked && now - unlockAt < 500 && !reduced) {
       ctx.fillStyle = '#9cdfa5'; ctx.fillRect(19, y + 2, 1, 24);
     }
     drawRoomWindow(tier, y);
-    if (locked) {
+    if (locked && !(flight && flight.impacted && f === flight.to)) {
       ctx.fillStyle = '#283237'; ctx.fillRect(86, y + 4, 9, 16);
       ctx.fillStyle = '#53665b'; for (let row = 6; row < 20; row += 3) ctx.fillRect(87, y + row, 7, 1);
       ctx.fillStyle = '#efbc6f'; ctx.fillRect(88, y + 11, 5, 2);
     }
+    const targetDown = flight && flight.impacted && f === flight.to;
+    if (f > 1 && (targetDown || !(state.defeatedGuards || []).includes(f))) drawGuard(y, targetDown, now);
     const reward = G.surprises(state, Math.floor((f - 1) / 20)).find(r => r.floor === f);
     if (reward && locked) {
       for (let seat = 0; seat < 3; seat++) {
@@ -416,21 +467,14 @@ function drawScene(now) {
         ctx.fillStyle = '#f3a9de'; ctx.fillRect(x, y + 11, 10, 1);
       }
     }
-    const occupied = flight && !flight.impacted ? flight.from : state.floor;
-    if (f === occupied) {
+    const occupied = flight ? flight.from : state.floor;
+    if (f === occupied && !(flight && flight.phase === 'rise')) {
       ctx.strokeStyle = '#9cdfa5'; ctx.strokeRect(18.5, y + .5, 79, 26);
-      const celebrating = !reduced && now - rewardAt < 1000;
-      const bob = celebrating ? -Math.round(3 * Math.abs(Math.sin((now - rewardAt) / 100))) : !reduced && now - inputAt < 180 ? -1 : 0;
-      ctx.fillStyle = '#343332'; ctx.fillRect(24, y + 3 + bob, 8, 4);
-      ctx.fillStyle = '#ddb38a'; ctx.fillRect(25, y + 7 + bob, 6, 6);
-      ctx.fillStyle = '#aeca91'; ctx.fillRect(24, y + 13 + bob, 8, 8);
-      ctx.fillStyle = '#1b2726'; ctx.fillRect(27, y + 20, 8, 3); ctx.fillRect(31, y + 22, 3, 4); ctx.fillRect(32, y + 12 + bob, 4, 6);
-      ctx.fillStyle = '#9cdfa5'; ctx.fillRect(33, y + 13 + bob, 2, 2);
-      drawCostume(ctx, state.equipped, 24, y + 3 + bob);
-      if (now - inputAt < 300) { ctx.fillRect(37, y + 7, 1, 2); ctx.fillRect(39, y + 5, 1, 2); }
+      drawRider(y, now, false);
     }
     ctx.restore();
   }
+  if (flight && flight.phase === 'rise') drawRider(92, now, true);
   if (charge) {
     const strength = charge.steps / 5;
     const size = reduced ? 12 : 8 + strength * 16;
@@ -466,8 +510,8 @@ function drawScene(now) {
     ctx.fillStyle = '#9cdfa5'; ctx.font = '6px monospace'; ctx.fillText('+1', 28, y);
   }
   if (flight) {
-    if (!flight.impacted) {
-      const t = Math.min(1, progress / .78);
+    if (flight.phase === 'throw') {
+      const t = progress;
       // Flight begins next to the first seat, exits the window then curves back to the target window.
       const x = 44 + 46 * t + Math.sin(t * Math.PI) * 31;
       const worldFloor = flight.from + (flight.to - flight.from) * t;
@@ -484,15 +528,10 @@ function drawScene(now) {
       const size = reduced ? 12 : 24 - 16 * t;
       ctx.save(); ctx.translate(x, y); if (!reduced) ctx.rotate(t * Math.PI * 4);
       ctx.drawImage(projectile, -size / 2, -size / 2, size, size); ctx.restore();
-    } else if (!reduced) {
-      const spread = (progress - .78) / .22;
+    } else if (flight.phase === 'impact' && !reduced) {
+      const spread = Math.min(1, (now - flight.start - 1200) / 350);
       ctx.fillStyle = '#a9d5e0';
       for (let n = 0; n < 6; n++) ctx.fillRect(Math.round(90 + Math.cos(n) * spread * 15), Math.round(103 + Math.sin(n) * spread * 14), 2, 2);
-    }
-    if (progress >= 1) {
-      flight = null; viewFloor = state.floor;
-      $('caption').textContent = '每次点击或按键，摸鱼值 +1。';
-      say('抵达 ' + state.floor + 'F 第一席，另两席预留给未来好友。'); renderBag(); renderHUD();
     }
   }
 }

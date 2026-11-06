@@ -2,13 +2,14 @@
 const G = ToiletGame, $ = id => document.getElementById(id), KEY = 'toilet-idle-demo-v1';
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let state = G.initial(), charge = null, flight = null, lastSave = 0, viewFloor = 1;
-let inputAt = -Infinity, unlockAt = -Infinity, effects = [], lastRewards = [], rewardAt = -Infinity;
+let inputAt = -Infinity, unlockAt = -Infinity, effects = [], lastRewards = [], rewardAt = -Infinity, spentAt = -Infinity, nextAuto = 0;
 function say(text) { $('notice').textContent = text; }
 try {
   const raw = localStorage.getItem(KEY);
   if (raw) { state = G.restore(raw); say('进度已恢复，无自动或离线收益。'); }
 } catch (e) { say('无法读取存档；当前为新局，请用导出存档备份。'); }
 viewFloor = state.floor;
+charge = state.charge;
 function save() {
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
@@ -67,12 +68,12 @@ function renderBag() {
   for (let id = 0; id < G.ITEM_COUNT; id++) {
     const info = itemInfo(id), seen = state.collection.includes(id), b = document.createElement('button');
     b.className = 'card' + (id === state.selected ? ' active' : '') + (((info.type !== 0 && info.q === 4) || info.style === 1 || info.rainbow) && seen ? ' rainbow' : '');
-    b.style.setProperty('--quality', info.quality.color); b.disabled = !state.bag[id] || !!flight;
+    b.style.setProperty('--quality', info.quality.color); b.disabled = !state.bag[id] || !!flight || !!charge;
     b.title = info.quality.name + ' · 蓄满升 ' + G.climb(id, 2000) + ' 层';
     const c = document.createElement('canvas'); c.width = c.height = 16; if (seen) icon(c, id); b.append(c);
     const name = document.createElement('span'); name.textContent = seen ? info.name : '未收集'; b.append(name);
     const count = document.createElement('span'); count.textContent = seen ? info.quality.name + ' ×' + state.bag[id] : '?'; b.append(count);
-    b.onclick = () => { if (flight) return; cancelCharge(); state.selected = id; save(); renderBag(); renderHUD(); };
+    b.onclick = () => { if (flight || charge) return; state.selected = id; save(); renderBag(); renderHUD(); };
     container.append(b);
   }
   $('collected').textContent = state.collection.length;
@@ -91,15 +92,18 @@ function renderBag() {
 function renderHUD() {
   const id = state.selected;
   $('coins').textContent = Math.floor(state.coins).toLocaleString(); $('floor').textContent = state.floor + 'F';
-  $('decor').textContent = ['基础卫生间','盆栽卫生间','精装卫生间','行政卫生间'][Math.min(3, Math.floor((state.floor - 1) / 10))];
+  $('decor').textContent = G.bathroom(state.floor).name;
   $('cost').textContent = G.cost(state.floor) + ' 摸鱼值';
   $('draw').disabled = !!flight || !!charge || state.coins < G.cost(state.floor);
-  $('throw').disabled = !!flight || id === null || state.floor >= G.MAX_FLOOR;
+  $('throw').disabled = !!flight || id === null || !!charge || state.floor >= G.MAX_FLOOR;
+  $('autoMode').checked = state.autoMode;
+  $('chargeFill').style.width = (charge ? charge.steps * 20 : 0) + '%';
+  $('chargeLabel').textContent = charge ? '蓄力 ' + charge.steps + '/5 · 点击推进' : '投掷共需 5 摸鱼值';
   $('selectedName').textContent = id === null ? '先抽取产物' : itemInfo(id).name;
   const info = id === null ? null : itemInfo(id);
   $('itemToggle').classList.toggle('rainbow', info !== null && ((info.type !== 0 && info.q === 4) || info.style === 1 || info.rainbow));
   icon($('selectedIcon'), id);
-  if (!charge) $('prediction').textContent = id === null ? '至少 +1 层' : '可升 ' + G.climb(id, 0) + '–' + G.climb(id, 2000) + ' 层';
+  $('prediction').textContent = id === null ? '至少 +1 层' : '满条 +' + G.climb(id, 2000) + ' 层';
   $('scene').setAttribute('aria-label', '当前 ' + state.floor + ' 层，已解锁 1 至 ' + state.unlockedFloor + ' 层，每层三席，自己在第一席。');
 }
 function earnInput(e) {
@@ -107,15 +111,22 @@ function earnInput(e) {
   G.input(state); inputAt = performance.now();
   if (effects.length >= 6) effects.shift();
   effects.push({ time: inputAt, floor: state.floor });
+  const control = e.target && e.target.closest && e.target.closest('button, input, label, .panel, dialog');
+  if (e.type === 'pointerdown' && e.isPrimary !== false && charge && !control) advancePaidCharge();
   save(); renderHUD();
 }
 // Mouse/pen/touch presses count once at pointerdown; key auto-repeat is excluded.
 document.addEventListener('pointerdown', earnInput, true);
 document.addEventListener('keydown', earnInput, true);
-function panel() { cancelCharge(); $('panel').hidden = !$('panel').hidden; renderBag(); }
+// Suppress press-and-hold menus only inside the game, not editable fields.
+document.addEventListener('contextmenu', e => {
+  const target = e.target;
+  if (target && target.closest && target.closest('.widget, dialog') && !target.closest('input, textarea')) e.preventDefault();
+});
+function panel() { $('panel').hidden = !$('panel').hidden; renderBag(); }
 $('bagToggle').onclick = panel; $('itemToggle').onclick = panel; $('closePanel').onclick = () => { $('panel').hidden = true; };
 $('collapse').onclick = () => {
-  cancelCharge(); $('panel').hidden = true;
+  $('panel').hidden = true;
   const compact = $('widget').classList.toggle('compact');
   $('collapse').textContent = compact ? '+' : '−'; $('collapse').setAttribute('aria-label', compact ? '展开界面' : '收起界面');
 };
@@ -124,34 +135,35 @@ $('draw').onclick = () => {
   const id = G.draw(state);
   if (id !== null) { const info = itemInfo(id); say('抽到 ' + info.quality.name + ' · ' + info.name + '，已选中。'); save(); renderBag(); }
   renderHUD();
+  if (state.autoMode) beginCharge();
 };
 function beginCharge() {
-  if (charge || flight || state.selected === null || state.floor >= G.MAX_FLOOR) return;
-  charge = { start: performance.now(), id: state.selected };
-  $('caption').textContent = '按住蓄力，松手破窗；Esc 取消。'; renderHUD();
+  if (flight || !G.startCharge(state)) return;
+  charge = state.charge; nextAuto = performance.now() + 400;
+  $('caption').textContent = '点击空白或楼层：+1 后消耗 1，蓄力 +20%。';
+  save(); renderBag(); renderHUD();
 }
 function cancelCharge() {
-  if (!charge) return; charge = null; $('chargeFill').style.width = '0%';
-  $('chargeLabel').textContent = '长按蓄力，松手投掷'; $('caption').textContent = '取消蓄力不消耗产物。'; renderHUD();
+  if (!charge) return; G.cancelCharge(state); charge = null;
+  $('caption').textContent = '已取消，产物保留；已消耗蓄力费用不退。'; save(); renderBag(); renderHUD();
 }
-function releaseCharge() {
+function advancePaidCharge() {
   if (!charge) return;
-  const duration = performance.now() - charge.start; charge = null;
-  const result = G.launch(state, duration); $('chargeFill').style.width = '0%'; $('chargeLabel').textContent = '长按蓄力，松手投掷';
+  const step = G.advanceCharge(state);
+  if (!step) { $('caption').textContent = '余额不足，点击屏幕赚取并投入 1 值。'; return; }
+  spentAt = performance.now(); charge = state.charge; nextAuto = spentAt + 400;
+  save(); renderHUD();
+  const result = step.launch;
   if (!result) return;
   flight = { ...result, start: performance.now(), duration: reduced ? 120 : 1200, impacted: false };
   viewFloor = result.from; save(); $('caption').textContent = '飞往 ' + result.to + 'F · 窗口仍封闭';
   say('本次升 ' + (result.to - result.from) + ' 层，产物已消耗。'); renderBag(); renderHUD();
 }
-$('throw').addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); beginCharge(); if (charge) $('throw').setPointerCapture(e.pointerId); });
-$('throw').addEventListener('pointerup', releaseCharge);
-$('throw').addEventListener('pointercancel', cancelCharge); $('throw').addEventListener('lostpointercapture', cancelCharge);
-$('throw').addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (!e.repeat) beginCharge(); } });
-$('throw').addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); releaseCharge(); } });
-$('throw').addEventListener('blur', cancelCharge);
+$('throw').onclick = beginCharge;
+$('autoMode').onchange = () => { state.autoMode = $('autoMode').checked; nextAuto = performance.now() + 400; save(); renderHUD(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { cancelCharge(); $('panel').hidden = true; } });
-window.addEventListener('blur', cancelCharge);
-document.addEventListener('visibilitychange', () => { cancelCharge(); save(); });
+window.addEventListener('blur', save);
+document.addEventListener('visibilitychange', save);
 window.addEventListener('pagehide', save);
 $('export').onclick = () => {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -164,14 +176,14 @@ $('file').onchange = async e => {
     if (f.size > 100000) throw new Error('Too large'); const next = G.restore(await f.text());
     if (flight) { say('请等投掷结束后再导入。'); return; }
     if (!confirm('导入会替换当前进度，是否继续？')) return;
-    cancelCharge(); state = next; viewFloor = state.floor; effects = []; lastRewards = []; rewardAt = -Infinity; save(); renderBag(); renderHUD(); say('存档已导入，无离线收益。');
+    state = next; charge = state.charge; viewFloor = state.floor; effects = []; lastRewards = []; rewardAt = -Infinity; nextAuto = performance.now() + 400; save(); renderBag(); renderHUD(); say('存档已导入，无离线收益。');
   } catch (err) { say('导入失败：不是有效存档，当前进度未改变。'); }
   finally { e.target.value = ''; }
 };
 $('reset').onclick = () => { if (flight) { say('请等投掷结束后再重开。'); return; } cancelCharge(); $('resetDialog').showModal(); };
 $('cancelReset').onclick = () => { $('resetDialog').close(); };
 $('testOptions').onclick = () => {
-  cancelCharge(); $('testCoins').value = Math.floor(state.coins); $('testError').textContent = '';
+  $('testCoins').value = Math.floor(state.coins); $('testError').textContent = '';
   $('testDialog').showModal(); $('testCoins').focus(); $('testCoins').select();
 };
 $('cancelTest').onclick = () => { $('testDialog').close(); };
@@ -185,7 +197,7 @@ $('testForm').onsubmit = e => {
   say('测试余额已设置为 ' + value.toLocaleString() + ' 摸鱼值。');
 };
 $('confirmReset').onclick = () => {
-  state = G.initial(); viewFloor = 1; flight = null; effects = []; lastRewards = []; inputAt = unlockAt = rewardAt = -Infinity;
+  state = G.initial(); charge = null; viewFloor = 1; flight = null; effects = []; lastRewards = []; inputAt = unlockAt = rewardAt = spentAt = -Infinity;
   save(); renderBag(); renderHUD(); say('重新开始，赠送 60 摸鱼值。'); $('resetDialog').close();
 };
 const ctx = $('scene').getContext('2d'), projectile = document.createElement('canvas'); projectile.width = projectile.height = 16;
@@ -222,6 +234,88 @@ function drawCostume(c, id, x, y) {
     c.fillStyle = '#ddb38a'; c.fillRect(x + 3, y + 10, 3, 3);
   }
 }
+function drawRoomDecor(tier, y, now) {
+  // Decorative blocks stay behind the seats and never replace character/reward sprites.
+  if (tier === 0) {
+    ctx.fillStyle = '#1c282b'; ctx.fillRect(48, y + 3, 5, 3); ctx.fillRect(69, y + 7, 4, 2);
+    ctx.fillStyle = '#889a95'; ctx.fillRect(49, y + 5, 8, 1);
+  }
+  if (tier === 1) {
+    ctx.fillStyle = '#394742'; for (let x = 20; x < 82; x += 12) ctx.fillRect(x, y + 9, 10, 1);
+    ctx.fillStyle = '#a36e4b'; ctx.fillRect(76, y + 1, 2, 24); ctx.fillRect(70, y + 3, 8, 2);
+    ctx.fillStyle = '#303a36'; ctx.fillRect(46, y + 8, 3, 2); ctx.fillRect(48, y + 10, 1, 3);
+  }
+  if (tier === 2) {
+    ctx.fillStyle = '#ccd1c0'; for (let x = 20; x < 82; x += 10) ctx.fillRect(x, y + 8, 9, 1);
+    ctx.fillStyle = '#374d57'; ctx.fillRect(77, y + 21, 5, 5); ctx.fillRect(76, y + 20, 7, 1);
+  }
+  if (tier === 3 || tier === 7) {
+    ctx.fillStyle = tier === 7 ? '#65934f' : '#70926a';
+    for (let x = 20; x < 82; x += 9) { ctx.fillRect(x, y + 1, 2, 7); ctx.fillRect(x + 2, y + 3, 3, 2); }
+    ctx.fillStyle = '#ab8557'; ctx.fillRect(76, y + 23, 5, 3);
+    ctx.fillStyle = '#9bb96d'; ctx.fillRect(77, y + 16, 2, 7); ctx.fillRect(74, y + 18, 6, 2);
+  }
+  if (tier === 4) {
+    ctx.fillStyle = '#d07869'; ctx.fillRect(19, y + 1, 63, 2);
+    ctx.fillStyle = '#e5e5ce'; ctx.fillRect(47, y + 4, 8, 5);
+    ctx.fillStyle = '#d07869'; ctx.fillRect(48, y + 5, 5, 1);
+    ctx.fillStyle = '#71614e'; ctx.fillRect(75, y + 21, 7, 5);
+    ctx.fillStyle = '#67cbb2'; ctx.fillRect(76, y + 22, 1, 3); ctx.fillRect(79, y + 22, 1, 3);
+  }
+  if (tier === 5) {
+    ctx.fillStyle = '#b39ae8'; ctx.fillRect(19, y + 1, 63, 1);
+    ctx.fillStyle = '#81b9e7'; ctx.fillRect(20, y + 26, 62, 1);
+    ctx.fillStyle = '#172321'; ctx.fillRect(48, y + 3, 9, 6);
+    ctx.fillStyle = '#67cbb2'; ctx.fillRect(49, y + 4, 3, 2); ctx.fillRect(53, y + 6, 3, 1);
+  }
+  if (tier === 6) {
+    ctx.fillStyle = '#b5b9a2'; ctx.fillRect(43, y + 2, 1, 5); ctx.fillRect(44, y + 7, 7, 1); ctx.fillRect(64, y + 10, 6, 1);
+    ctx.fillStyle = '#efbc6f'; ctx.fillRect(74, y + 5, 3, 4); ctx.fillRect(24, y + 2, 3, 3);
+  }
+  if (tier === 7) {
+    for (let n = 0; n < 4; n++) {
+      const x = 29 + n * 13; ctx.fillStyle = n % 2 ? '#f3a9de' : '#efbc6f'; ctx.fillRect(x, y + 4, 3, 3);
+      ctx.fillStyle = '#e5e5ce'; ctx.fillRect(x + 1, y + 5, 1, 1);
+    }
+    const x = reduced ? 57 : 51 + Math.round(Math.sin(now / 700) * 9);
+    ctx.fillStyle = '#efbc6f'; ctx.fillRect(x, y + 9, 2, 2); ctx.fillRect(x + 3, y + 8, 2, 2);
+    ctx.fillStyle = '#263533'; ctx.fillRect(x + 2, y + 9, 1, 2);
+  }
+  if (tier === 8) {
+    ctx.fillStyle = '#a0b2ba'; ctx.fillRect(20, y + 1, 62, 1); ctx.fillRect(20, y + 25, 62, 1);
+    ctx.fillStyle = '#293b47'; ctx.fillRect(48, y + 4, 14, 4);
+    ctx.fillStyle = '#9cdfa5'; ctx.fillRect(50, y + 5, 2, 2);
+    ctx.fillStyle = '#efbc6f'; ctx.fillRect(55, y + 5, 2, 2);
+    ctx.fillStyle = '#db6c65'; ctx.fillRect(60, y + 5, 1, 2);
+  }
+  if (tier === 9) {
+    ctx.fillStyle = '#e5e5ce'; ctx.fillRect(48, y + 4, 9, 3); ctx.fillRect(51, y + 2, 4, 2);
+    ctx.fillRect(72, y + 5, 1, 3); ctx.fillRect(71, y + 6, 3, 1);
+    ctx.fillStyle = '#efbc6f'; ctx.fillRect(40, y + 3, 1, 1);
+  }
+}
+function drawRoomWindow(tier, y) {
+  ctx.fillStyle = tier === 3 || tier === 7 ? '#947657' : '#222e35'; ctx.fillRect(85, y + 3, 11, 18);
+  ctx.fillStyle = '#769fac'; ctx.fillRect(87, y + 5, 7, 13);
+  ctx.fillStyle = '#425d6c'; ctx.fillRect(87, y + 14, 3, 4); ctx.fillRect(91, y + 10, 3, 8);
+  if (tier === 0) {
+    ctx.fillStyle = '#bfbca4'; ctx.fillRect(87, y + 5, 7, 13);
+    ctx.fillStyle = '#6a7163'; for (let row = 7; row < 17; row += 3) ctx.fillRect(88, y + row, 5, 1);
+    ctx.fillStyle = '#1c282b'; ctx.fillRect(92, y + 13, 2, 4);
+  }
+  if (tier === 8) {
+    ctx.fillStyle = '#a0b2ba'; ctx.fillRect(85, y + 5, 11, 13);
+    ctx.fillStyle = '#172d3d'; ctx.fillRect(87, y + 7, 7, 9);
+    // Stepped circular porthole, kept pixel-aligned.
+    ctx.fillStyle = G.BATHROOMS[tier].wall;
+    ctx.fillRect(85, y + 5, 2, 2); ctx.fillRect(94, y + 5, 2, 2); ctx.fillRect(85, y + 16, 2, 2); ctx.fillRect(94, y + 16, 2, 2);
+    ctx.fillStyle = '#e5e5ce'; ctx.fillRect(90, y + 9, 1, 1);
+  }
+  if (tier === 9) {
+    ctx.fillStyle = '#a8cbd8'; ctx.fillRect(87, y + 5, 7, 13);
+    ctx.fillStyle = '#e5e5ce'; ctx.fillRect(87, y + 12, 6, 3); ctx.fillRect(89, y + 10, 3, 2);
+  }
+}
 function drawScene(now) {
   let progress = 0;
   if (flight) {
@@ -239,29 +333,25 @@ function drawScene(now) {
   const base = Math.floor(viewFloor) - 1;
   for (let k = -1; k < 5; k++) {
     const f = base + k; if (f < 1) continue;
-    const y = Math.round(92 - (f - viewFloor) * 30), tier = Math.min(3, Math.floor((f - 1) / 10));
+    const y = Math.round(92 - (f - viewFloor) * 30), theme = G.bathroom(f), tier = theme.tier;
     const locked = f > state.unlockedFloor;
     ctx.save();
     ctx.globalAlpha = Math.max(.15, Math.min(1, (y + 28) / 100));
-    ctx.fillStyle = ['#3e514e','#4d6558','#63586b','#726246'][tier]; ctx.fillRect(18, y, 80, 28);
+    ctx.fillStyle = theme.wall; ctx.fillRect(18, y, 80, 28);
     ctx.fillStyle = '#263533'; ctx.fillRect(18, y + 27, 80, 3);
     ctx.fillStyle = '#a3b7a4'; ctx.font = '5px monospace'; ctx.fillText(f + 'F', 1, y + 17);
+    drawRoomDecor(tier, y, now);
     for (let seat = 0; seat < 3; seat++) {
       const x = 23 + seat * 20;
-      ctx.fillStyle = '#788c7d'; ctx.fillRect(x - 2, y, 1, 27);
-      ctx.fillStyle = tier === 3 ? '#d2b578' : '#b7c7b3';
+      ctx.fillStyle = theme.partition; ctx.fillRect(x - 2, y, 1, 27);
+      ctx.fillStyle = theme.toilet;
       ctx.fillRect(x + 1, y + 13, 7, 6); ctx.fillRect(x, y + 20, 10, 3); ctx.fillRect(x + 3, y + 23, 5, 3);
       if (seat > 0 && !locked) { ctx.fillStyle = '#889a95'; ctx.fillRect(x + 4, y + 7, 1, 5); ctx.fillRect(x + 2, y + 9, 5, 1); }
     }
-    if (locked) {
-      // Keep all seats visible. The lock marker and shutter belong to the window only.
-      ctx.fillStyle = '#efbc6f'; ctx.fillRect(78, y + 5, 3, 4); ctx.fillRect(79, y + 3, 1, 3);
-    } else if (now - unlockAt < 500 && !reduced) {
+    if (!locked && now - unlockAt < 500 && !reduced) {
       ctx.fillStyle = '#9cdfa5'; ctx.fillRect(19, y + 2, 1, 24);
     }
-    ctx.fillStyle = '#222e35'; ctx.fillRect(85, y + 3, 11, 18);
-    ctx.fillStyle = '#769fac'; ctx.fillRect(87, y + 5, 7, 13);
-    ctx.fillStyle = '#425d6c'; ctx.fillRect(87, y + 14, 3, 4); ctx.fillRect(91, y + 10, 3, 8);
+    drawRoomWindow(tier, y);
     if (locked) {
       ctx.fillStyle = '#283237'; ctx.fillRect(86, y + 4, 9, 16);
       ctx.fillStyle = '#53665b'; for (let row = 6; row < 20; row += 3) ctx.fillRect(87, y + row, 7, 1);
@@ -292,7 +382,7 @@ function drawScene(now) {
     ctx.restore();
   }
   if (charge) {
-    const strength = Math.min(1, (now - charge.start) / G.MAX_CHARGE_MS);
+    const strength = charge.steps / 5;
     const size = reduced ? 12 : 8 + strength * 16;
     const y = 103;
     icon(projectile, charge.id, now);
@@ -318,6 +408,9 @@ function drawScene(now) {
     ctx.restore();
   }
   effects = effects.filter(e => now - e.time < 650);
+  if (now - spentAt < 450) {
+    ctx.fillStyle = '#efbc6f'; ctx.font = '6px monospace'; ctx.fillText('-1', 47, 90 - (reduced ? 0 : Math.floor((now - spentAt) / 100)));
+  }
   for (const e of effects) {
     const age = now - e.time, y = Math.round(96 - (e.floor - viewFloor) * 30 - (reduced ? 0 : age / 80));
     ctx.fillStyle = '#9cdfa5'; ctx.font = '6px monospace'; ctx.fillText('+1', 28, y);
@@ -354,10 +447,14 @@ function drawScene(now) {
   }
 }
 function frame(now) {
-  if (charge) {
-    const ms = Math.min(2000, now - charge.start); $('chargeFill').style.width = ms / 20 + '%';
-    $('chargeLabel').textContent = ms >= 2000 ? '蓄满了，松手投掷' : '蓄力 ' + (ms / 1000).toFixed(1) + ' / 2.0 秒';
-    $('prediction').textContent = '预计 +' + G.climb(charge.id, ms) + ' 层';
+  if (state.autoMode && !document.hidden && $('panel').hidden && !$('testDialog').open && !$('resetDialog').open && !flight && now >= nextAuto && state.floor < G.MAX_FLOOR) {
+    nextAuto = now + 400;
+    if (charge) advancePaidCharge();
+    else if (state.selected !== null && state.bag[state.selected]) beginCharge();
+    else if (state.coins >= G.cost(state.floor)) {
+      const id = G.draw(state);
+      if (id !== null) { say('自动抽到 ' + itemInfo(id).name); save(); renderBag(); renderHUD(); beginCharge(); }
+    }
   }
   if (!$('widget').classList.contains('compact') || flight) drawScene(now);
   $('coinDisplay').classList.toggle('flash', now - inputAt < 300);

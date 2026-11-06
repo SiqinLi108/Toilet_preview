@@ -42,7 +42,7 @@
     return { q, type, style: 0, name: ITEMS[type].skins[q], quality: QUALITIES[q] };
   }
   function initial(seed = Math.floor(Math.random() * 4294967296)) {
-    return { version: 4, floor: 1, unlockedFloor: 1, coins: 60, bag: Array(ITEM_COUNT).fill(0), collection: [], selected: null, pending: null,
+    return { version: 5, autoMode: true, charge: null, floor: 1, unlockedFloor: 1, coins: 60, bag: Array(ITEM_COUNT).fill(0), collection: [], selected: null, pending: null,
       seed: seed >>> 0, costumes: [], equipped: null, lastSurpriseFloor: 1 };
   }
   function surprises(state, block) {
@@ -83,7 +83,6 @@
       for (const reward of surprises(state, block)) {
         if (reward.floor <= from || reward.floor > to) continue;
         if (!state.costumes.includes(reward.costume)) state.costumes.push(reward.costume);
-        state.equipped = reward.costume;
         earned.push(reward);
       }
     }
@@ -104,7 +103,7 @@
   }
   function draw(state, random = Math.random) {
     const price = cost(state.floor);
-    if (state.pending || state.coins < price) return null;
+    if (state.pending || state.charge || state.coins < price) return null;
     const typeRoll = random(), qualityRoll = random();
     if (![typeRoll, qualityRoll].every(n => Number.isFinite(n) && n >= 0 && n < 1)) throw new Error('Invalid random');
     const type = Math.floor(typeRoll * 3);
@@ -126,7 +125,7 @@
   }
   function launch(state, duration) {
     const id = state.selected;
-    if (state.pending || state.floor >= MAX_FLOOR || !Number.isInteger(id) || !state.bag[id]) return null;
+    if (state.pending || state.charge || state.floor >= MAX_FLOOR || !Number.isInteger(id) || !state.bag[id]) return null;
     const from = state.floor;
     const to = Math.min(MAX_FLOOR, from + climb(id, duration));
     state.bag[id]--;
@@ -134,6 +133,30 @@
     if (!state.bag[id]) state.selected = state.bag.findIndex(n => n > 0);
     if (state.selected === -1) state.selected = null;
     return { ...state.pending };
+  }
+  function startCharge(state) {
+    const id = state.selected;
+    if (state.pending || state.charge || state.floor >= MAX_FLOOR ||
+        !Number.isInteger(id) || id < 0 || id >= ITEM_COUNT || !state.bag[id]) return null;
+    state.charge = { id, steps: 0 };
+    return { ...state.charge };
+  }
+  function advanceCharge(state) {
+    const charge = state.charge;
+    if (!charge || state.coins < 1 || state.pending || state.floor >= MAX_FLOOR ||
+        state.selected !== charge.id || !state.bag[charge.id]) return null;
+    state.coins -= 1;
+    charge.steps += 1;
+    if (charge.steps < 5) return { steps: charge.steps, launch: null };
+    // The fifth paid step launches once; only launch consumes inventory.
+    state.charge = null;
+    return { steps: 5, launch: launch(state, MAX_CHARGE_MS) };
+  }
+  function cancelCharge(state) {
+    if (!state.charge) return null;
+    const result = { ...state.charge };
+    state.charge = null;
+    return result;
   }
   function land(state) {
     if (!state.pending) return null;
@@ -148,7 +171,7 @@
     const s = JSON.parse(raw);
     const version = s && s.version;
     const size = version === 1 ? 12 : version === 2 ? 15 : version === 3 ? 35 : ITEM_COUNT;
-    if (!s || ![1, 2, 3, 4].includes(version) || !Number.isSafeInteger(s.floor) || s.floor < 1 || s.floor > MAX_FLOOR ||
+    if (!s || ![1, 2, 3, 4, 5].includes(version) || !Number.isSafeInteger(s.floor) || s.floor < 1 || s.floor > MAX_FLOOR ||
         !Number.isFinite(s.coins) || s.coins < 0 ||
         !Array.isArray(s.bag) || s.bag.length !== size || !s.bag.every(n => Number.isSafeInteger(n) && n >= 0) ||
         !Array.isArray(s.collection) || !s.collection.every(n => Number.isInteger(n) && n >= 0 && n < size)) {
@@ -187,14 +210,23 @@
       s.collection = s.collection.map(map);
       s.selected = Number.isInteger(s.selected) && s.selected >= 0 && s.selected < size ? map(s.selected) : null;
       if (s.pending) s.pending.id = map(s.pending.id);
-      const equipped = s.equipped;
-      s.lastSurpriseFloor = 1;
-      collectSurprises(s, 1, s.unlockedFloor);
-      if (equipped !== null) s.equipped = equipped;
-      s.version = 4;
+      s.lastSurpriseFloor = s.unlockedFloor;
     }
     if (!Number.isSafeInteger(s.lastSurpriseFloor) || s.lastSurpriseFloor < s.unlockedFloor ||
         s.lastSurpriseFloor > MAX_FLOOR) throw new Error('Invalid surprise progress');
+    if (version < 5) {
+      s.autoMode = true;
+      s.charge = null;
+    }
+    if (typeof s.autoMode !== 'boolean') throw new Error('Invalid auto mode');
+    if (s.charge !== null) {
+      const c = s.charge;
+      if (!c || !Number.isInteger(c.id) || c.id < 0 || c.id >= ITEM_COUNT ||
+          !Number.isInteger(c.steps) || c.steps < 0 || c.steps > 4 ||
+          c.id !== s.selected || s.bag[c.id] < 1 || s.pending !== null || s.floor >= MAX_FLOOR) {
+        throw new Error('Invalid charge');
+      }
+    }
     if (s.pending !== null) {
       // A saved launch has already consumed its item. Finish it once on reload.
       land(s);
@@ -204,12 +236,30 @@
       s.selected = s.bag.findIndex(n => n > 0);
       if (s.selected === -1) s.selected = null;
     }
-    return { version: 4, floor: s.floor, unlockedFloor: s.unlockedFloor, coins: s.coins,
+    return { version: 5, autoMode: s.autoMode, charge: s.charge, floor: s.floor, unlockedFloor: s.unlockedFloor, coins: s.coins,
       bag: s.bag, collection: s.collection, selected: s.selected, pending: s.pending,
       seed: s.seed, costumes: s.costumes, equipped: s.equipped, lastSurpriseFloor: s.lastSurpriseFloor };
   }
-  const api = { QUALITIES, POOP_QUALITIES, POOP_IDS, ITEMS, POOP_STYLES, COSTUMES, ITEM_COUNT, MAX_CHARGE_MS, MAX_FLOOR,
-    initial, item, surprises, collectSurprises, input, cost, weights, poopWeights, draw, climb, launch, land, restore };
+  const BATHROOMS = [
+    { name: '拾荒卫生间', wall: '#494640', partition: '#756349', toilet: '#ab8557' },
+    { name: '老旧卫生间', wall: '#555d59', partition: '#797d70', toilet: '#b7c7b3' },
+    { name: '办公卫生间', wall: '#a3aaa2', partition: '#547b96', toilet: '#e5e5ce' },
+    { name: '绿植卫生间', wall: '#4d6558', partition: '#947657', toilet: '#b7c7b3' },
+    { name: '便利店卫生间', wall: '#aeb1a2', partition: '#a85c56', toilet: '#e5e5ce' },
+    { name: '电竞卫生间', wall: '#333348', partition: '#222b35', toilet: '#a0aabd' },
+    { name: '行政卫生间', wall: '#726b57', partition: '#ab9471', toilet: '#d2b578' },
+    { name: '花园卫生间', wall: '#385c40', partition: '#947657', toilet: '#b7c7b3' },
+    { name: '太空卫生间', wall: '#53636f', partition: '#91a2ac', toilet: '#c0d0d4' },
+    { name: '云端卫生间', wall: '#a8bcca', partition: '#d0d8d0', toilet: '#e5e5ce' }
+  ];
+  function bathroom(floor) {
+    if (!Number.isSafeInteger(floor) || floor < 1) throw new Error('Invalid bathroom floor');
+    const tier = Math.min(9, Math.floor((floor - 1) / 50));
+    return { ...BATHROOMS[tier], tier };
+  }
+  const api = { BATHROOMS, bathroom, QUALITIES, POOP_QUALITIES, POOP_IDS, ITEMS, POOP_STYLES, COSTUMES, ITEM_COUNT, MAX_CHARGE_MS, MAX_FLOOR,
+    initial, item, surprises, collectSurprises, input, cost, weights, poopWeights, draw, climb, launch,
+    startCharge, advanceCharge, cancelCharge, land, restore };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ToiletGame = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
